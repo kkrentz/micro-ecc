@@ -5,7 +5,34 @@
 
 #include "types.h"
 
-#if (defined(_WIN32) || defined(_WIN64))
+#ifdef KEYSTONE_BOOTLOADER
+
+extern int random_bytes(uint8_t *dest, unsigned size);
+static int default_RNG(uint8_t *dest, unsigned size) {
+  return random_bytes(dest, size);
+}
+#define default_RNG_defined 1
+
+#elif (defined(KEYSTONE_SM))
+
+#include "sm-sbi.h"
+static int default_RNG(uint8_t *dest, unsigned size) {
+  for (unsigned i = 0; i < size; i++) {
+    dest[i] = sbi_sm_random();
+  }
+  return 1;
+}
+#define default_RNG_defined 1
+
+#elif defined(KEYSTONE_ENCLAVE)
+
+extern int oscore_ng_csprng(void *dst, size_t size);
+static int default_RNG(uint8_t *dest, unsigned size) {
+  return oscore_ng_csprng(dest, size);
+}
+#define default_RNG_defined 1
+
+#elif (defined(_WIN32) || defined(_WIN64))
 /* Windows */
 
 // use pragma syntax to prevent tweaking the linker script for getting CryptXYZ function

@@ -3,7 +3,11 @@
 #ifndef _UECC_H_
 #define _UECC_H_
 
+#ifdef KEYSTONE_SM
+#include "fixedint.h"
+#else
 #include <stdint.h>
+#endif
 
 /* Platform selection options.
 If uECC_PLATFORM is not defined, the code will try to guess it based on compiler macros.
