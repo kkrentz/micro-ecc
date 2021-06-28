@@ -3,7 +3,15 @@
 #include "uECC.h"
 #include "uECC_vli.h"
 
+#ifdef KEYSTONE_BOOTLOADER
+#include "string.h"
+#elif defined(KEYSTONE_SM)
+#include <sbi/sbi_string.h>
+#define memcpy sbi_memcpy
+#define memset sbi_memset
+#else
 #include <string.h>
+#endif
 
 #ifndef uECC_RNG_MAX_TRIES
     #define uECC_RNG_MAX_TRIES 64

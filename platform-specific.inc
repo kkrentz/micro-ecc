@@ -5,7 +5,17 @@
 
 #include "types.h"
 
-#if (defined(_WIN32) || defined(_WIN64))
+#ifdef KEYSTONE_BOOTLOADER
+
+extern int random_bytes(uint8_t *dest, unsigned size);
+static int default_RNG(uint8_t *dest, unsigned size) {
+  return random_bytes(dest, size);
+}
+#define default_RNG_defined 1
+
+#elif defined(KEYSTONE_SM) || defined(KEYSTONE_ENCLAVE)
+
+#elif (defined(_WIN32) || defined(_WIN64))
 /* Windows */
 
 // use pragma syntax to prevent tweaking the linker script for getting CryptXYZ function
