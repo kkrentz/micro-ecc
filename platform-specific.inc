@@ -89,6 +89,16 @@ static int default_RNG(uint8_t *dest, unsigned size)
 }
 #define default_RNG_defined 1
 
+#elif defined(CONTIKI)
+
+#include "lib/csprng.h"
+
+static int default_RNG(uint8_t *dest, unsigned size)
+{
+    return csprng_rand(dest, size);
+}
+#define default_RNG_defined 1
+
 #endif /* platform */
 
 #endif /* _UECC_PLATFORM_SPECIFIC_H_ */
