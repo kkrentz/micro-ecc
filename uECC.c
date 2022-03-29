@@ -1542,6 +1542,9 @@ int uECC_verify(const uint8_t *public_key,
     uECC_vli_modInv(z, s, curve->n, num_n_words); /* z = 1/s */
     u1[num_n_words - 1] = 0;
     bits2int(u1, message_hash, hash_size, curve);
+    if (uECC_vli_isZero(u1, num_words)) {
+      return 0;
+    }
     uECC_vli_modMult(u1, u1, z, curve->n, num_n_words); /* u1 = e/s */
     uECC_vli_modMult(u2, r, z, curve->n, num_n_words); /* u2 = r/s */
 
