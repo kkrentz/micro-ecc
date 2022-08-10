@@ -187,6 +187,33 @@ int uECC_shared_secret(const uint8_t *public_key,
                        uint8_t *secret,
                        uECC_Curve curve);
 
+/* uECC_shared_fhmqv_secret() function.
+Generates what is denoted by sigma in FHMQV-C.
+(see https://fastd.readthedocs.io/en/v18/crypto/fhmqvc.html).
+To obtain a symmetric key, pass sigma and all ephemeral and static public keys to a KDF function.
+
+Inputs:
+    ssk - static secret key.
+    esk - ephemeral secret key.
+    spk - static public key.
+    epk - ephemeral public key.
+    d   - hash value over public keys (see https://fastd.readthedocs.io/en/v18/crypto/fhmqvc.html).
+    e   - hash value over public keys (see https://fastd.readthedocs.io/en/v18/crypto/fhmqvc.html).
+
+Outputs:
+    result - sigma.
+
+Returns 1 if sigma was generated successfully, 0 if an error occurred.
+*/
+int uECC_shared_fhmqv_secret(uint8_t *result,
+                             const uint8_t *ssk,
+                             const uint8_t *esk,
+                             const uint8_t *spk,
+                             const uint8_t *epk,
+                             const uint8_t *d,
+                             const uint8_t *e,
+                             uECC_Curve curve);
+
 #if uECC_SUPPORT_COMPRESSED_POINT
 /* uECC_compress() function.
 Compress a public key.
