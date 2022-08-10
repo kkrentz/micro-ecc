@@ -1082,6 +1082,97 @@ int uECC_shared_secret(const uint8_t *public_key,
     return !EccPoint_isZero(_public, curve);
 }
 
+static void padToNative(uECC_word_t *native,
+                        const uint8_t *bytes,
+                        uECC_Curve curve) {
+    unsigned bytes_size = (unsigned)curve->num_bytes >> 1;
+    uint8_t temp[uECC_MAX_WORDS * uECC_WORD_SIZE];
+
+    memcpy(temp, bytes, bytes_size);
+    memset(temp + bytes_size, 0, curve->num_bytes - bytes_size);
+    uECC_vli_bytesToNative(native, temp, curve->num_bytes);
+}
+
+int uECC_shared_fhmqv_secret(const uint8_t *static_private_key,
+                             const uint8_t *ephemeral_private_key,
+                             const uint8_t *static_public_key,
+                             const uint8_t *ephemeral_public_key,
+                             const uint8_t *d,
+                             const uint8_t *e,
+                             uint8_t *shared_secret,
+                             uECC_Curve curve) {
+    uECC_word_t _static_private_key[uECC_MAX_WORDS];
+    uECC_word_t _ephemeral_private_key[uECC_MAX_WORDS];
+    uECC_word_t _static_public_key[uECC_MAX_WORDS * 2];
+    uECC_word_t _ephemeral_public_key[uECC_MAX_WORDS * 2];
+    uECC_word_t _d[uECC_MAX_WORDS];
+    uECC_word_t _e[uECC_MAX_WORDS];
+    uECC_word_t s[uECC_MAX_WORDS];
+    uECC_word_t sigma[uECC_MAX_WORDS * 2];
+    uECC_word_t z[uECC_MAX_WORDS];
+
+    uECC_vli_bytesToNative(_static_private_key,
+                           static_private_key,
+                           BITS_TO_BYTES(curve->num_n_bits));
+    uECC_vli_bytesToNative(_ephemeral_private_key,
+                           ephemeral_private_key,
+                           BITS_TO_BYTES(curve->num_n_bits));
+    uECC_vli_bytesToNative(_static_public_key,
+                           static_public_key,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_static_public_key + curve->num_words,
+                           static_public_key + curve->num_bytes,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_ephemeral_public_key,
+                           ephemeral_public_key,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_ephemeral_public_key + curve->num_words,
+                           ephemeral_public_key + curve->num_bytes,
+                           curve->num_bytes);
+    padToNative(_d, d, curve);
+    padToNative(_e, e, curve);
+
+    /* s := d * static private key */
+    uECC_vli_modMult(s, _d, _static_private_key, curve->n, curve->num_words);
+
+    /* s := ephemeral private key + d * static private key */
+    uECC_vli_modAdd(s, _ephemeral_private_key, s, curve->n, curve->num_words);
+
+    /* sigma := e x static public key */
+    uECC_point_mult(sigma, _static_public_key, _e, curve);
+
+    /* sigma := ephemeral public key + e x static public key */
+    uECC_vli_modSub(z, sigma, _ephemeral_public_key, curve->p, curve->num_words);
+    XYcZ_add(_ephemeral_public_key, _ephemeral_public_key + curve->num_words,
+             sigma, sigma + curve->num_words,
+             _ephemeral_public_key,
+             curve);
+    uECC_vli_modInv(z, z, curve->p, curve->num_words);
+    apply_z(sigma, sigma + curve->num_words, z, curve);
+
+    /* sigma := s x (ephemeral public key + e x static public key) */
+    {
+        uECC_word_t tmp1[uECC_MAX_WORDS];
+        uECC_word_t tmp2[uECC_MAX_WORDS];
+        uECC_word_t *p2[2] = {tmp1, tmp2};
+        uECC_word_t *initial_Z = 0;
+        uECC_word_t carry = regularize_k(s, tmp1, tmp2, curve);
+
+        /* If an RNG function was specified, try to get a random initial Z value to improve
+           protection against side-channel attacks. */
+        if (g_rng_function) {
+            if (uECC_generate_random_int(p2[carry], curve->p, curve->num_words)) {
+                initial_Z = p2[carry];
+            }
+        }
+
+        EccPoint_mult(sigma, sigma, p2[!carry], initial_Z, curve->num_n_bits + 1, curve);
+    }
+
+    uECC_vli_nativeToBytes(shared_secret, curve->num_bytes, sigma);
+    return 1;
+}
+
 #if uECC_SUPPORT_COMPRESSED_POINT
 void uECC_compress(const uint8_t *public_key, uint8_t *compressed, uECC_Curve curve) {
     wordcount_t i;
