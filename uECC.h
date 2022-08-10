@@ -187,6 +187,34 @@ int uECC_shared_secret(const uint8_t *public_key,
                        uint8_t *secret,
                        uECC_Curve curve);
 
+/* uECC_shared_fhmqv_secret() function.
+Generates a shared secret as per FHMQV.
+
+Note: Instead of computing separate digests, one can set
+d||e = Hash(ours and peer's ephemeral and static public keys).
+
+Inputs:
+    static_private_key - Our static private key of 2 * curve size bytes.
+    ephemeral_private_key - Our ephemeral private key of curve size bytes.
+    static_public_key - Peer's static public key of 2 * curve size bytes.
+    ephemeral_public_key - Peer's ephemeral public key of 2 * curve size bytes.
+    d   - The FHMQV parameter d of (curve size)/2 bytes.
+    e   - The FHMQV parameter e of (curve size)/2 bytes.
+
+Outputs:
+    shared_secret - The resultant shared secret of curve size bytes.
+
+Returns 1 if sigma was generated successfully, 0 if an error occurred.
+*/
+int uECC_shared_fhmqv_secret(const uint8_t *static_private_key,
+                             const uint8_t *ephemeral_private_key,
+                             const uint8_t *static_public_key,
+                             const uint8_t *ephemeral_public_key,
+                             const uint8_t *d,
+                             const uint8_t *e,
+                             uint8_t *shared_secret,
+                             uECC_Curve curve);
+
 #if uECC_SUPPORT_COMPRESSED_POINT
 /* uECC_compress() function.
 Compress a public key.
