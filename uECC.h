@@ -388,6 +388,93 @@ int uECC_verify(const uint8_t *public_key,
                 const uint8_t *signature,
                 uECC_Curve curve);
 
+/* uECC_encode_ecqv_certificate_and_hash_t function type.
+Encode and hash an ECQV certificate.
+
+Inputs:
+    public_key_reconstruction_data - 2 * curve size bytes to reconstruct the public key.
+    opaque                         - The opaque pointer from uECC_generate_ecqv_certificate().
+Outputs:
+    certificate_hash               - The resultant digest of <= curve size bytes.
+
+Returns 1 if the ECQV certificate was encoded and hashed successfully, 0 if an error occurred.
+ */
+typedef int (* uECC_encode_ecqv_certificate_and_hash_t)(
+    const uint8_t *public_key_reconstruction_data,
+    void *opaque,
+    uint8_t *certificate_hash);
+
+/* uECC_generate_ecqv_certificate() function.
+Generate an ECQV certificate.
+
+Note: If proto_public_key came over an unauthenticated channel, it should be
+validated using uECC_valid_public_key() before calling this function.
+
+Inputs:
+    proto_public_key                - The proto-public key of 2 * curve size bytes.
+    ca_private_key                  - The CA's private key of curve size bytes.
+    encode_and_hash                 - Callback for encoding and hashing.
+    opaque                          - An opaque pointer for use in the encode_and_hash callback.
+Outputs:
+    private_key_reconstruction_data - curve size bytes to reconstruct the private key.
+
+Returns 1 if the ECQV certificate was generated successfully, 0 if an error occurred.
+ */
+int uECC_generate_ecqv_certificate(const uint8_t *proto_public_key,
+                                   const uint8_t *ca_private_key,
+                                   uECC_encode_ecqv_certificate_and_hash_t encode_and_hash,
+                                   void *opaque,
+                                   uint8_t *private_key_reconstruction_data,
+                                   uECC_Curve curve);
+
+/* uECC_generate_ecqv_key_pair() function.
+Generate an ECQV key pair.
+
+Note: If private_key_reconstruction_data came over an unauthenticated channel,
+public_key should be ensured to match with the one reconstructed by uECC_reconstruct_ecqv_public_key().
+
+Inputs:
+    proto_private_key               - The proto-private key of curve size bytes.
+    certificate_hash                - The digest of the ECQV certificate.
+    hash_size                       - The size of certificate_hash in bytes.
+    private_key_reconstruction_data - curve size bytes to reconstruct the private key.
+Outputs:
+    public_key                      - The public key of 2 * curve size bytes.
+    private_key                     - The private key of curve size bytes.
+
+Returns 1 if the ECQV key pair was generated successfully, 0 if an error occurred.
+ */
+int uECC_generate_ecqv_key_pair(const uint8_t *proto_private_key,
+                                const uint8_t *certificate_hash,
+                                unsigned hash_size,
+                                const uint8_t *private_key_reconstruction_data,
+                                uint8_t *public_key,
+                                uint8_t *private_key,
+                                uECC_Curve curve);
+
+/* uECC_reconstruct_ecqv_public_key() function.
+Reconstruct an ECQV public key.
+
+Note: If public_key_reconstruction_data came over an unauthenticated channel,
+it should be validated using uECC_valid_public_key() before calling this function.
+
+Inputs:
+    certificate_hash               - The digest of the ECQV certificate.
+    hash_size                      - The size of certificate_hash in bytes.
+    public_key_reconstruction_data - 2 * curve size bytes to reconstruct the public key.
+    ca_public_key                  - The CA's public key of 2 * curve size bytes.
+Outputs:
+    public_key                    - The public key of 2 * curve size bytes.
+
+Returns 1 if the ECQV public key was reconstructed successfully, 0 if an error occurred.
+ */
+int uECC_reconstruct_ecqv_public_key(const uint8_t *certificate_hash,
+                                     unsigned hash_size,
+                                     const uint8_t *public_key_reconstruction_data,
+                                     const uint8_t *ca_public_key,
+                                     uint8_t *public_key,
+                                     uECC_Curve curve);
+
 #ifdef __cplusplus
 } /* end of extern "C" */
 #endif

@@ -1284,10 +1284,11 @@ int uECC_compute_public_key(const uint8_t *private_key, uint8_t *public_key, uEC
 
 /* -------- ECDSA code -------- */
 
-static void bits2int(uECC_word_t *native,
-                     const uint8_t *bits,
-                     unsigned bits_size,
-                     uECC_Curve curve) {
+static int bits2int(uECC_word_t *native,
+                    const uint8_t *bits,
+                    unsigned bits_size,
+                    int uniformly,
+                    uECC_Curve curve) {
     unsigned num_n_bytes = BITS_TO_BYTES(curve->num_n_bits);
     unsigned num_n_words = BITS_TO_WORDS(curve->num_n_bits);
     int shift;
@@ -1300,22 +1301,25 @@ static void bits2int(uECC_word_t *native,
 
     uECC_vli_clear(native, num_n_words);
     uECC_vli_bytesToNative(native, bits, bits_size);
-    if (bits_size * 8 <= (unsigned)curve->num_n_bits) {
-        return;
-    }
-    shift = bits_size * 8 - curve->num_n_bits;
-    carry = 0;
-    ptr = native + num_n_words;
-    while (ptr-- > native) {
-        uECC_word_t temp = *ptr;
-        *ptr = (temp >> shift) | carry;
-        carry = temp << (uECC_WORD_BITS - shift);
+    if (bits_size * 8 > (unsigned)curve->num_n_bits) {
+        shift = bits_size * 8 - curve->num_n_bits;
+        carry = 0;
+        ptr = native + num_n_words;
+        while (ptr-- > native) {
+            uECC_word_t temp = *ptr;
+            *ptr = (temp >> shift) | carry;
+            carry = temp << (uECC_WORD_BITS - shift);
+        }
     }
 
     /* Reduce mod curve_n */
     if (uECC_vli_cmp_unsafe(curve->n, native, num_n_words) != 1) {
-        uECC_vli_sub(native, native, curve->n, num_n_words);
+        if (!uniformly) {
+            uECC_vli_sub(native, native, curve->n, num_n_words);
+        }
+        return 0;
     }
+    return 1;
 }
 
 static int uECC_sign_with_k_internal(const uint8_t *private_key,
@@ -1383,7 +1387,7 @@ static int uECC_sign_with_k_internal(const uint8_t *private_key,
     uECC_vli_set(s, p, num_words);
     uECC_vli_modMult(s, tmp, s, curve->n, num_n_words); /* s = r*d */
 
-    bits2int(tmp, message_hash, hash_size, curve);
+    bits2int(tmp, message_hash, hash_size, 0, curve);
     uECC_vli_modAdd(s, tmp, s, curve->n, num_n_words); /* s = e + r*d */
     uECC_vli_modMult(s, s, k, curve->n, num_n_words);  /* s = (e + r*d) / k */
     if (uECC_vli_numBits(s, num_n_words) > (bitcount_t)curve->num_bytes * 8) {
@@ -1407,7 +1411,7 @@ int uECC_sign_with_k(const uint8_t *private_key,
                             uint8_t *signature,
                             uECC_Curve curve) {
     uECC_word_t k2[uECC_MAX_WORDS];
-    bits2int(k2, k, BITS_TO_BYTES(curve->num_n_bits), curve);
+    bits2int(k2, k, BITS_TO_BYTES(curve->num_n_bits), 0, curve);
     return uECC_sign_with_k_internal(private_key, message_hash, hash_size, k2, signature, curve);
 }
 
@@ -1611,7 +1615,7 @@ int uECC_verify(const uint8_t *public_key,
     /* Calculate u1 and u2. */
     uECC_vli_modInv(z, s, curve->n, num_n_words); /* z = 1/s */
     u1[num_n_words - 1] = 0;
-    bits2int(u1, message_hash, hash_size, curve);
+    bits2int(u1, message_hash, hash_size, 0, curve);
     uECC_vli_modMult(u1, u1, z, curve->n, num_n_words); /* u1 = e/s */
     uECC_vli_modMult(u2, r, z, curve->n, num_n_words); /* u2 = r/s */
 
@@ -1667,6 +1671,242 @@ int uECC_verify(const uint8_t *public_key,
 
     /* Accept only if v == r. */
     return (int)(uECC_vli_equal(rx, r, num_words));
+}
+
+/* -------- ECQV code -------- */
+/* Copyright 2024, Siemens AG. Licensed under the BSD 2-clause license. */
+
+int uECC_generate_ecqv_certificate(const uint8_t *proto_public_key,
+                                   const uint8_t *ca_private_key,
+                                   uECC_encode_ecqv_certificate_and_hash_t encode_and_hash,
+                                   void *opaque,
+                                   uint8_t *private_key_reconstruction_data,
+                                   uECC_Curve curve) {
+    uECC_word_t tries;
+    uECC_word_t reconstruction_private_key[uECC_MAX_WORDS];
+    uECC_word_t reconstruction_public_key[uECC_MAX_WORDS * 2];
+#if uECC_VLI_NATIVE_LITTLE_ENDIAN
+    uECC_word_t *_private_key_reconstruction_data = (uECC_word_t *)private_key_reconstruction_data;
+#else
+    uECC_word_t _private_key_reconstruction_data[uECC_MAX_WORDS];
+#endif
+
+    for (tries = 0; tries < uECC_RNG_MAX_TRIES; ++tries) {
+        /* generate reconstruction private key k in [1, n - 1] */
+        if (!uECC_generate_random_int(reconstruction_private_key,
+                                      curve->n,
+                                      BITS_TO_WORDS(curve->num_n_bits))) {
+            return 0;
+        }
+
+        /* generate reconstruction public key kG */
+        if (!EccPoint_compute_public_key(reconstruction_public_key,
+                                         reconstruction_private_key,
+                                         curve)) {
+            continue;
+        }
+
+        /* add proto-public key to reconstruction public key kG */
+        {
+            uECC_word_t _proto_public_key[uECC_MAX_WORDS * 2];
+            uECC_word_t z[uECC_MAX_WORDS];
+
+            uECC_vli_bytesToNative(_proto_public_key, proto_public_key, curve->num_bytes);
+            uECC_vli_bytesToNative(_proto_public_key + curve->num_words,
+                                   proto_public_key + curve->num_bytes,
+                                   curve->num_bytes);
+            uECC_vli_modSub(z,
+                            reconstruction_public_key,
+                            _proto_public_key,
+                            curve->p,
+                            curve->num_words);
+            XYcZ_add(_proto_public_key, _proto_public_key + curve->num_words,
+                     reconstruction_public_key, reconstruction_public_key + curve->num_words,
+                     _proto_public_key,
+                     curve);
+            uECC_vli_modInv(z, z, curve->p, curve->num_words);
+            apply_z(reconstruction_public_key,
+                    reconstruction_public_key + curve->num_words,
+                    z,
+                    curve);
+        }
+
+        /* encode and hash ECQV certificate */
+        {
+#if uECC_VLI_NATIVE_LITTLE_ENDIAN
+            uint8_t *public_key_reconstruction_data = (uint8_t *)reconstruction_public_key;
+#else
+            uint8_t public_key_reconstruction_data[uECC_MAX_WORDS * 2 * uECC_WORD_SIZE];
+#endif
+            uint8_t certificate_hash[uECC_MAX_WORDS * uECC_WORD_SIZE];
+            uECC_word_t h[uECC_MAX_WORDS];
+
+#if !uECC_VLI_NATIVE_LITTLE_ENDIAN
+            uECC_vli_nativeToBytes(public_key_reconstruction_data,
+                                   curve->num_bytes,
+                                   reconstruction_public_key);
+            uECC_vli_nativeToBytes(public_key_reconstruction_data + curve->num_bytes,
+                                   curve->num_bytes,
+                                   reconstruction_public_key + curve->num_words);
+#endif
+            if (!encode_and_hash(public_key_reconstruction_data,
+                                 opaque,
+                                 certificate_hash)) {
+                return 0;
+            }
+            if (!bits2int(h, certificate_hash, curve->num_words * uECC_WORD_SIZE, 1, curve)) {
+                /* To uniformly distribute hashes over [0, n-1], we retry with a new reconstruction
+                   key pair. SECG SEC4, by contrast, accepts a non-uniform distribution. */
+                continue;
+            }
+
+            /* multiply hash and reconstruction private key */
+            uECC_vli_modMult(_private_key_reconstruction_data,
+                             h,
+                             reconstruction_private_key,
+                             curve->n,
+                             BITS_TO_WORDS(curve->num_n_bits));
+        }
+
+        /* add CA's private key to obtain private key reconstruction data */
+        {
+            uECC_word_t _ca_private_key[uECC_MAX_WORDS];
+            uECC_vli_bytesToNative(_ca_private_key,
+                                   ca_private_key,
+                                   BITS_TO_BYTES(curve->num_n_bits));
+            uECC_vli_modAdd(_private_key_reconstruction_data,
+                            _private_key_reconstruction_data,
+                            _ca_private_key,
+                            curve->n,
+                            BITS_TO_WORDS(curve->num_n_bits));
+        }
+
+#if !uECC_VLI_NATIVE_LITTLE_ENDIAN
+        uECC_vli_nativeToBytes(private_key_reconstruction_data,
+                               BITS_TO_BYTES(curve->num_n_bits),
+                               _private_key_reconstruction_data);
+#endif
+        return 1;
+    }
+    return 0;
+}
+
+int uECC_generate_ecqv_key_pair(const uint8_t *proto_private_key,
+                                const uint8_t *certificate_hash,
+                                unsigned hash_size,
+                                const uint8_t *private_key_reconstruction_data,
+                                uint8_t *public_key,
+                                uint8_t *private_key,
+                                uECC_Curve curve) {
+    uECC_word_t _proto_private_key[uECC_MAX_WORDS];
+    uECC_word_t _private_key_reconstruction_data[uECC_MAX_WORDS];
+    uECC_word_t h[uECC_MAX_WORDS];
+#if uECC_VLI_NATIVE_LITTLE_ENDIAN
+    uECC_word_t *_private_key = (uECC_word_t *)private_key;
+    uECC_word_t *_public_key = (uECC_word_t *)public_key;
+#else
+    uECC_word_t _private_key[uECC_MAX_WORDS];
+    uECC_word_t _public_key[uECC_MAX_WORDS * 2];
+#endif
+
+    uECC_vli_bytesToNative(_proto_private_key,
+                           proto_private_key,
+                           BITS_TO_BYTES(curve->num_n_bits));
+    uECC_vli_bytesToNative(_private_key_reconstruction_data,
+                           private_key_reconstruction_data,
+                           BITS_TO_BYTES(curve->num_n_bits));
+    if (!bits2int(h, certificate_hash, hash_size, 1, curve)) {
+        return 0;
+    }
+
+    /* multiply hash by proto-private key */
+    uECC_vli_modMult(_private_key,
+                     h,
+                     _proto_private_key,
+                     curve->n,
+                     BITS_TO_WORDS(curve->num_n_bits));
+
+    /* add private key reconstruction data to obtain the private key */
+    uECC_vli_modAdd(_private_key,
+                    _private_key,
+                    _private_key_reconstruction_data,
+                    curve->n,
+                    BITS_TO_WORDS(curve->num_n_bits));
+
+    /* compute the corresponding public key */
+    if(!EccPoint_compute_public_key(_public_key, _private_key, curve)) {
+        return 0;
+    }
+
+#if !uECC_VLI_NATIVE_LITTLE_ENDIAN
+    uECC_vli_nativeToBytes(private_key,
+                           BITS_TO_BYTES(curve->num_n_bits),
+                           _private_key);
+    uECC_vli_nativeToBytes(public_key,
+                           curve->num_bytes,
+                           _public_key);
+    uECC_vli_nativeToBytes(public_key + curve->num_bytes,
+                           curve->num_bytes,
+                           _public_key + curve->num_words);
+#endif
+
+    return 1;
+}
+
+int uECC_reconstruct_ecqv_public_key(const uint8_t *certificate_hash,
+                                     unsigned hash_size,
+                                     const uint8_t *public_key_reconstruction_data,
+                                     const uint8_t *ca_public_key,
+                                     uint8_t *public_key,
+                                     uECC_Curve curve) {
+    uECC_word_t _public_key_reconstruction_data[uECC_MAX_WORDS * 2];
+    uECC_word_t _ca_public_key[uECC_MAX_WORDS * 2];
+    uECC_word_t h[uECC_MAX_WORDS];
+    uECC_word_t z[uECC_MAX_WORDS];
+#if uECC_VLI_NATIVE_LITTLE_ENDIAN
+    uECC_word_t *_public_key = (uECC_word_t *)public_key;
+#else
+    uECC_word_t _public_key[uECC_MAX_WORDS * 2];
+#endif
+
+    uECC_vli_bytesToNative(_public_key_reconstruction_data,
+                           public_key_reconstruction_data,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_public_key_reconstruction_data + curve->num_words,
+                           public_key_reconstruction_data + curve->num_bytes,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_ca_public_key,
+                           ca_public_key,
+                           curve->num_bytes);
+    uECC_vli_bytesToNative(_ca_public_key + curve->num_words,
+                           ca_public_key + curve->num_bytes,
+                           curve->num_bytes);
+    if (!bits2int(h, certificate_hash, hash_size, 1, curve)) {
+        return 0;
+    }
+
+    /* multiply h by public key reconstruction data */
+    uECC_point_mult(_public_key, _public_key_reconstruction_data, h, curve);
+
+    /* add CA's public key to reconstruct the public key */
+    uECC_vli_modSub(z, _public_key, _ca_public_key, curve->p, curve->num_words);
+    XYcZ_add(_ca_public_key, _ca_public_key + curve->num_words,
+             _public_key, _public_key + curve->num_words,
+             _ca_public_key,
+             curve);
+    uECC_vli_modInv(z, z, curve->p, curve->num_words);
+    apply_z(_public_key, _public_key + curve->num_words, z, curve);
+
+#if !uECC_VLI_NATIVE_LITTLE_ENDIAN
+    uECC_vli_nativeToBytes(public_key,
+                           curve->num_bytes,
+                           _public_key);
+    uECC_vli_nativeToBytes(public_key + curve->num_bytes,
+                           curve->num_bytes,
+                           _public_key + curve->num_words);
+#endif
+
+    return 1;
 }
 
 #if uECC_ENABLE_VLI_API
