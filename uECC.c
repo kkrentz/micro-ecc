@@ -3,6 +3,8 @@
 #include "uECC.h"
 #include "uECC_vli.h"
 
+#include <string.h>
+
 #ifndef uECC_RNG_MAX_TRIES
     #define uECC_RNG_MAX_TRIES 64
 #endif
@@ -161,17 +163,6 @@ struct uECC_Curve_t {
     void (*mmod_fast)(uECC_word_t *result, uECC_word_t *product);
 #endif
 };
-
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-static void bcopy(uint8_t *dst,
-                  const uint8_t *src,
-                  unsigned num_bytes) {
-    while (0 != num_bytes) {
-        num_bytes--;
-        dst[num_bytes] = src[num_bytes];
-    }
-}
-#endif
 
 static cmpresult_t uECC_vli_cmp_unsafe(const uECC_word_t *left,
                                        const uECC_word_t *right,
@@ -975,6 +966,12 @@ static uECC_word_t EccPoint_compute_public_key(uECC_word_t *result,
     return 1;
 }
 
+#if uECC_VLI_NATIVE_LITTLE_ENDIAN
+
+#define uECC_vli_nativeToBytes(bytes, num_bytes, native) memcpy((bytes), (native), (num_bytes))
+#define uECC_vli_bytesToNative(native, bytes, num_bytes) memcpy((native), (bytes), (num_bytes))
+
+#else /* uECC_VLI_NATIVE_LITTLE_ENDIAN */
 #if uECC_WORD_SIZE == 1
 
 uECC_VLI_API void uECC_vli_nativeToBytes(uint8_t *bytes,
@@ -1017,6 +1014,7 @@ uECC_VLI_API void uECC_vli_bytesToNative(uECC_word_t *native,
 }
 
 #endif /* uECC_WORD_SIZE */
+#endif /* uECC_VLI_NATIVE_LITTLE_ENDIAN */
 
 int uECC_make_key(uint8_t *public_key,
                   uint8_t *private_key,
@@ -1062,14 +1060,9 @@ int uECC_shared_secret(const uint8_t *public_key,
     wordcount_t num_words = curve->num_words;
     wordcount_t num_bytes = curve->num_bytes;
 
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) _private, private_key, num_bytes);
-    bcopy((uint8_t *) _public, public_key, num_bytes*2);
-#else
     uECC_vli_bytesToNative(_private, private_key, BITS_TO_BYTES(curve->num_n_bits));
     uECC_vli_bytesToNative(_public, public_key, num_bytes);
     uECC_vli_bytesToNative(_public + num_words, public_key + num_bytes, num_bytes);
-#endif
 
     /* Regularize the bitcount for the private key so that attackers cannot use a side channel
        attack to learn the number of leading zeros. */
@@ -1085,11 +1078,7 @@ int uECC_shared_secret(const uint8_t *public_key,
     }
 
     EccPoint_mult(_public, _public, p2[!carry], initial_Z, curve->num_n_bits + 1, curve);
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) secret, (uint8_t *) _public, num_bytes);
-#else
     uECC_vli_nativeToBytes(secret, num_bytes, _public);
-#endif
     return !EccPoint_isZero(_public, curve);
 }
 
@@ -1113,11 +1102,7 @@ void uECC_decompress(const uint8_t *compressed, uint8_t *public_key, uECC_Curve 
     uECC_word_t point[uECC_MAX_WORDS * 2];
 #endif
     uECC_word_t *y = point + curve->num_words;
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy(public_key, compressed+1, curve->num_bytes);
-#else
     uECC_vli_bytesToNative(point, compressed + 1, curve->num_bytes);
-#endif
     curve->x_side(y, point, curve);
     curve->mod_sqrt(y, curve);
 
@@ -1223,11 +1208,7 @@ static void bits2int(uECC_word_t *native,
     }
 
     uECC_vli_clear(native, num_n_words);
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) native, bits, bits_size);
-#else
     uECC_vli_bytesToNative(native, bits, bits_size);
-#endif
     if (bits_size * 8 <= (unsigned)curve->num_n_bits) {
         return;
     }
@@ -1305,11 +1286,7 @@ static int uECC_sign_with_k_internal(const uint8_t *private_key,
     uECC_vli_nativeToBytes(signature, curve->num_bytes, p); /* store r */
 #endif
 
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) tmp, private_key, BITS_TO_BYTES(curve->num_n_bits));
-#else
     uECC_vli_bytesToNative(tmp, private_key, BITS_TO_BYTES(curve->num_n_bits)); /* tmp = d */
-#endif
 
     s[num_n_words - 1] = 0;
     uECC_vli_set(s, p, num_words);
@@ -1321,11 +1298,7 @@ static int uECC_sign_with_k_internal(const uint8_t *private_key,
     if (uECC_vli_numBits(s, num_n_words) > (bitcount_t)curve->num_bytes * 8) {
         return 0;
     }
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) signature + curve->num_bytes, (uint8_t *) s, curve->num_bytes);
-#else
     uECC_vli_nativeToBytes(signature + curve->num_bytes, curve->num_bytes, s);
-#endif
     return 1;
 }
 
@@ -1519,16 +1492,13 @@ int uECC_verify(const uint8_t *public_key,
     r[num_n_words - 1] = 0;
     s[num_n_words - 1] = 0;
 
-#if uECC_VLI_NATIVE_LITTLE_ENDIAN
-    bcopy((uint8_t *) r, signature, curve->num_bytes);
-    bcopy((uint8_t *) s, signature + curve->num_bytes, curve->num_bytes);
-#else
+#if !uECC_VLI_NATIVE_LITTLE_ENDIAN
     uECC_vli_bytesToNative(_public, public_key, curve->num_bytes);
     uECC_vli_bytesToNative(
         _public + num_words, public_key + curve->num_bytes, curve->num_bytes);
+#endif
     uECC_vli_bytesToNative(r, signature, curve->num_bytes);
     uECC_vli_bytesToNative(s, signature + curve->num_bytes, curve->num_bytes);
-#endif
 
     /* r, s must not be 0. */
     if (uECC_vli_isZero(r, num_words) || uECC_vli_isZero(s, num_words)) {
