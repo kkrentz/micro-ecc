@@ -95,7 +95,7 @@ typedef uint64_t uECC_dword_t;
 
 typedef uint64_t uECC_word_t;
 #if SUPPORTS_INT128
-typedef unsigned __int128 uECC_dword_t;
+__extension__ typedef unsigned __int128 uECC_dword_t;
 #endif
 
 #define HIGH_BIT_SET 0x8000000000000000ull
