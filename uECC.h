@@ -268,6 +268,14 @@ Returns 1 if the key was computed successfully, 0 if an error occurred.
 */
 int uECC_compute_public_key(const uint8_t *private_key, uint8_t *public_key, uECC_Curve curve);
 
+/* For testing - sign with an explicitly specified k value */
+int uECC_sign_with_k(const uint8_t *private_key,
+                     const uint8_t *message_hash,
+                     unsigned hash_size,
+                     const uint8_t *k,
+                     uint8_t *signature,
+                     uECC_Curve curve);
+
 /* uECC_sign() function.
 Generate an ECDSA signature for a given hash value.
 
