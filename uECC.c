@@ -1304,6 +1304,12 @@ static int uECC_sign_with_k_internal(const uint8_t *private_key,
 
 /* For testing - sign with an explicitly specified k value */
 int uECC_sign_with_k(const uint8_t *private_key,
+                     const uint8_t *message_hash,
+                     unsigned hash_size,
+                     const uint8_t *k,
+                     uint8_t *signature,
+                     uECC_Curve curve);
+int uECC_sign_with_k(const uint8_t *private_key,
                             const uint8_t *message_hash,
                             unsigned hash_size,
                             const uint8_t *k,
